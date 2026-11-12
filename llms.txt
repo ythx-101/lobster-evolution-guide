@@ -1,0 +1,25 @@
+# Lobster Evolution Guide / 龙虾进化手册
+
+> 面向 OpenClaw / Claude Code 等 AI agent 开发者的中文实战指南，讲六个让 agent 持续运行的核心模式。
+> A hands-on Chinese guide to six architecture patterns for long-running AI agents: heartbeat, memory, sub-agents, idea farm, self-healing, reflection.
+
+纯文档项目，中文为主，MIT 许可。基于作者自建的 OpenClaw 系统整理，不是官方文档。
+每节附 Python 示例（标准库为主）、踩坑表和练习题。
+
+## Docs
+
+- [龙虾进化手册（中文完整版）](https://github.com/ythx-101/lobster-evolution-guide/blob/main/docs/lobster-guide-cn.md): 六大素养完整内容
+
+## Sections
+
+- 心跳 Heartbeat: 永不停歇的轮询循环，主动检查任务
+- 外挂海马体 Memory: NOW.md + 记忆文件 + Git 三层记忆，超过 20 个文件加向量搜索
+- 工蜂调度 Sub-agents: 拆任务、派子 agent 并行干活，主 agent 负责想和安排
+- 农场 Idea farm: 想法是种子，衰减是筛选器，浇水是关注
+- 自检与故障回流 Self-healing: 降级链 + 进度日志 + 防抖检查
+- 冥想与白日梦 Reflection: 定时反思 + 随机联想，灵感种进农场
+
+## Optional
+
+- [OpenClaw](https://github.com/openclaw/openclaw)
+- [LICENSE](https://github.com/ythx-101/lobster-evolution-guide/blob/main/LICENSE): MIT

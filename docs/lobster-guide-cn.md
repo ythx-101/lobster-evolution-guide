@@ -1,6 +1,6 @@
 # 龙虾进化手册：OpenClaw 六大核心素养
 
-**版本：v1.0.0** | 更新日期：2026-03-21 | 作者：林月（Lin Yue）
+**版本：v1.0.1** | 更新日期：2026-11-12 | 作者：林月（Lin Yue）
 
 > 让你的 agent 从聊天机器人变成一个活的系统。
 
@@ -14,6 +14,7 @@
 
 | 版本 | 日期 | 改动 |
 |---|---|---|
+| v1.0.1 | 2026-11-12 | 修正 OpenClaw 链接、农场衰减计算、cron 示例；心跳防丢任务；模型名改别名；key 改环境变量 |
 | v1.0.0 | 2026-03-21 | 初始发布。六大素养完整内容，含代码示例、踩坑表格和练习题 |
 
 ---
@@ -69,19 +70,21 @@ def heartbeat():
     print("心跳启动，轮询间隔", POLL_INTERVAL, "秒")
     while True:
         if INBOX.exists() and INBOX.stat().st_size > 0:
+            # 先原子改名再读：新任务会写进一个新的 inbox 文件，不会丢
+            work = INBOX.with_suffix(".processing")
+            INBOX.rename(work)
             tasks = []
-            with open(INBOX) as f:
+            with open(work) as f:
                 for line in f:
                     line = line.strip()
                     if line:
                         tasks.append(json.loads(line))
-            # 读完就清空
-            INBOX.write_text("")
             # 按优先级排序
             tasks.sort(key=lambda t: {"high": 0, "normal": 1, "low": 2}
                        .get(t.get("priority", "normal"), 1))
             for task in tasks:
                 process(task)
+            work.unlink()  # 处理完删掉
         time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
@@ -120,7 +123,7 @@ print("任务已写入 inbox")
 | 轮询太快（1 秒一次） | 30 秒足够了，agent 要的是耐力不是反射弧 |
 | 进程挂了就没了 | 用 systemd `Restart=always` 或 launchd `KeepAlive=true` 保活 |
 | 同一任务执行两次 | 给任务加 `id` 字段，处理前检查是否已执行过 |
-| 用数据库存 inbox | JSONL + 文件追加在 POSIX 上是原子的，零依赖，`cat` 就能调试，别过度设计 |
+| 用数据库存 inbox | 用 `"a"` 追加模式、每条一行、单次写入，小消息基本不会交错；JSONL 零依赖，`cat` 就能调试，别过度设计 |
 
 ### 练习题
 
@@ -191,20 +194,25 @@ type: user
 
 ```python
 # memory_search_demo.py — 语义记忆搜索（简化版）
-import json, math, urllib.request
+import json, math, os, urllib.request
 from pathlib import Path
 
 MEMORY_DIR = Path("./memories")  # 你的记忆文件目录
 INDEX_FILE = MEMORY_DIR / ".vector_index.json"
 
-# 替换成你自己的 Embedding API
-EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=YOUR_KEY"
+# 替换成你自己的 Embedding API；key 从环境变量 GEMINI_API_KEY 读取，不要写进代码
+EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent"
 
 def embed(text: str) -> list[float]:
     """获取文本的向量表示"""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("请先设置环境变量 GEMINI_API_KEY")
+        return []
     body = json.dumps({"content": {"parts": [{"text": text[:8000]}]}}).encode()
     req = urllib.request.Request(EMBED_URL, data=body,
-                                headers={"Content-Type": "application/json"})
+                                headers={"Content-Type": "application/json",
+                                         "x-goog-api-key": api_key})
     try:
         resp = urllib.request.urlopen(req, timeout=15)
         return json.loads(resp.read())["embedding"]["values"]
@@ -285,7 +293,7 @@ if __name__ == "__main__":
 import concurrent.futures
 import subprocess
 
-def spawn_worker(task: str, model: str = "claude-sonnet-4-20250514") -> str:
+def spawn_worker(task: str, model: str = "sonnet") -> str:
     """派一个子 agent 去执行任务"""
     try:
         result = subprocess.run(
@@ -366,10 +374,11 @@ if __name__ == "__main__":
   energy 足够高 + 浇水多次 → 收获（去实际构建）
 ```
 
-算一下：
-- 完全不管，~12 天枯萎
-- 每周浇一次水，稳定在 50-60%
-- 每天浇水，能回到 100%
+算一下（按上面的参数：每天 −0.08，每次浇水 +0.15）：
+- 完全不管，约 12–13 天枯萎（1.0 ÷ 0.08 = 12.5）
+- 每周浇一次水，每周净变化 −0.56 + 0.15 = −0.41，大约 3 周枯萎
+- 大约每 2 天浇一次，基本能维持住（一次浇水 0.15 ≈ 1.9 天的衰减）
+- 每天浇水，每天净 +0.07，会回到 100%（上限 1.0）
 
 ### 最小可跑示例
 
@@ -404,6 +413,9 @@ def plant(farm: dict, idea: str, source: str = "manual"):
 
 def water(farm: dict, idx: int):
     """浇水：给种子续命"""
+    if not 0 <= idx < len(farm["seeds"]):
+        print("没有这个编号")
+        return
     seed = farm["seeds"][idx]
     seed["energy"] = min(1.0, round(seed["energy"] + WATER_BOOST, 3))
     seed["waterings"] += 1
@@ -422,6 +434,9 @@ def decay(farm: dict):
 
 def harvest(farm: dict, idx: int):
     """收获：这个想法值得去做了"""
+    if not 0 <= idx < len(farm["seeds"]):
+        print("没有这个编号")
+        return
     seed = farm["seeds"].pop(idx)
     seed["harvested_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     farm["harvested"].append(seed)
@@ -513,7 +528,7 @@ def log_progress(msg: str):
         f.write(line)
     print(line.strip(), file=sys.stderr)
 
-def call_llm(prompt: str, model: str = "claude-sonnet-4-20250514") -> str:
+def call_llm(prompt: str, model: str = "sonnet") -> str:
     """调用 LLM，带降级链：CLI → HTTP bridge → 错误信息"""
 
     # 尝试 1：直接 CLI
@@ -530,6 +545,8 @@ def call_llm(prompt: str, model: str = "claude-sonnet-4-20250514") -> str:
         log_progress(f"CLI 失败: {e}，降级到 HTTP bridge...")
 
     # 尝试 2：HTTP bridge
+    # 这里假设你自己跑了一个转发 LLM 调用的本地 HTTP 服务；
+    # 没有的话这一级会失败，直接走兜底
     try:
         payload = json.dumps({"prompt": prompt, "model": model, "max_turns": 1})
         req = urllib.request.Request(
@@ -699,11 +716,13 @@ if __name__ == "__main__":
 ### 推荐 cron 配置
 
 ```cron
-30 2 * * *  python3 meditation.py --meditate     # 凌晨冥想
-0  10 * * * python3 meditation.py --daydream     # 上午白日梦
-0  15 * * * python3 meditation.py --daydream     # 下午白日梦
-0  6 * * *  python3 farm.py decay                # 每日衰减
+30 2 * * *  python3 meditation_demo.py meditate   # 凌晨冥想
+0  10 * * * python3 meditation_demo.py daydream   # 上午白日梦
+0  15 * * * python3 meditation_demo.py daydream   # 下午白日梦
+0  6 * * *  python3 farm_demo.py decay            # 每日衰减
 ```
+
+注意：`meditation_demo.py` 读的是相对路径 `NOW.md` 和 `./memories`，所以 cron 里要写脚本的绝对路径，或者先 `cd` 到脚本所在目录再运行。
 
 ### 常见踩坑
 
